@@ -19,7 +19,8 @@ redisContext *c;
 
 // Lua script for adding unique messages
 const char *lua_script =
-    "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then "
+    // "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then "
+    "if 0 == 0 then "
     "   redis.call('SADD', KEYS[1], ARGV[1]) "
     "   redis.call('RPUSH', KEYS[2], ARGV[1]) "
     "   redis.call('LTRIM', KEYS[2], -ARGV[2], -1) "
