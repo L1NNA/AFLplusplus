@@ -1,12 +1,16 @@
 #include "afl-fuzz.h"
+#include <string.h>
 #include "afl-mutations.h"
 #include <hiredis/hiredis.h>
 
 // windows host
-#define REDIS_HOST "host.docker.internal"
+//#define REDIS_HOST "host.docker.internal"
 
 // linux host
 // #define REDIS_HOST "172.17.0.1"
+
+// host
+#define REDIS_HOST "172.17.0.1" // change to your host IP
 
 #define REDIS_PORT 6379
 #define REDIS_PASSWORD "password"
@@ -28,6 +32,24 @@ const char *lua_script =
     "else "
     "   return 0 "
     "end";
+
+char *convert_unit8_as_string(uint8_t *buf, size_t buf_length) {
+    // Allocate a char buffer (length + 1 for null terminator)
+    char *char_message = (char *)malloc(buf_length + 1);
+    if (!char_message) {
+        fprintf(stderr, "Memory allocation failed\n");
+        return NULL;
+    }
+
+    // Copy the data from uint8_t to char
+    memcpy(char_message, buf, buf_length);
+    char_message[buf_length] = '\0'; // Null-terminate the string
+
+    // Print the string
+    printf("Converted message: %s\n", char_message);
+
+    return char_message;
+}
 
 void publish_message(redisContext *c, const char *message) {
   redisReply *reply;
@@ -172,7 +194,18 @@ size_t afl_custom_fuzz(my_mutator_t *data, uint8_t *buf, size_t buf_size,
     }
   }
 
-  if (c) publish_message(c, "hello!!!");
+  //if (c) consume_message(c);
+  // if (consumed_size > 0){
+  //   buf = append_to_buf(buf, buf_size, consumed_messages, consumed_size);
+  // }
+  //if (c) publish_message(c, "hello!!!");
+  // send buffer
+  //printf("buff: %s\nbuf_size: %d\n", buf, buf_size);
+  char *message=convert_unit8_as_string(buf, buf_size);
+  printf("buff: %s\nbuf_size: %d\nadd_buf: %s\nadd_buf_size: %d\n", buf, buf_size, add_buf, add_buf_size);
+  if (c) publish_message(c, message);
+  // Clean up
+  free(message);
 
   u32 havoc_steps = 1 + rand_below(data->afl, 16);
 
