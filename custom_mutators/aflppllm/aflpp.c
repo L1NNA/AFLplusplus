@@ -10,7 +10,7 @@
 // #define REDIS_HOST "172.17.0.1"
 
 // host
-#define REDIS_HOST "172.17.0.1" // change to your host IP
+#define REDIS_HOST "130.15.5.140" // change to your host IP
 
 #define REDIS_PORT 6379
 #define REDIS_PASSWORD "password"
