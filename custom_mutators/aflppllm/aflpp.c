@@ -22,111 +22,143 @@
 redisContext *c;
 
 // Lua script for adding unique messages
-const char *lua_script =
-    // "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then "
-    "if 0 == 0 then "
-    "   redis.call('SADD', KEYS[1], ARGV[1]) "
-    "   redis.call('RPUSH', KEYS[2], ARGV[1]) "
-    "   redis.call('LTRIM', KEYS[2], -ARGV[2], -1) "
-    "   return 1 "
-    "else "
-    "   return 0 "
-    "end";
+// const char *lua_script =
+//     // "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then "
+//     "if 0 == 0 then "
+//     "   redis.call('SADD', KEYS[1], ARGV[1]) "
+//     "   redis.call('RPUSH', KEYS[2], ARGV[1]) "
+//     "   redis.call('LTRIM', KEYS[2], -ARGV[2], -1) "
+//     "   return 1 "
+//     "else "
+//     "   return 0 "
+//     "end";
 
-char *convert_unit8_as_string(uint8_t *buf, size_t buf_length) {
-    // Allocate a char buffer (length + 1 for null terminator)
-    char *char_message = (char *)malloc(buf_length + 1);
-    if (!char_message) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return NULL;
-    }
+void cleanup_message(redisContext *c, uint8_t *message, size_t message_size) {
+    redisReply *reply;
 
-    // Copy the data from uint8_t to char
-    memcpy(char_message, buf, buf_length);
-    char_message[buf_length] = '\0'; // Null-terminate the string
-
-    // Print the string
-    printf("Converted message: %s\n", char_message);
-
-    return char_message;
-}
-
-void publish_message(redisContext *c, const char *message) {
-  redisReply *reply;
-
-  reply = redisCommand(c, "EVAL %s 2 %s %s %s %d", lua_script, SET_NAME,
-                       PRODUCER_NAME, message, MAX_QUEUE_SIZE);
-  if (reply == NULL) {
-    printf("Error: %s\n", c->errstr);
-    return;
-  }
-
-  if (reply->integer == 1) {
-    printf("Published: %s\n", message);
-  } else {
-    printf("Message %s is a duplicate and was not added.\n", message);
-  }
-
-  freeReplyObject(reply);
-}
-
-void consume_messages(redisContext *c) {
-  redisReply *reply;
-
-  while (1) {
-    reply = redisCommand(c, "LLEN %s", CONSUMER_NAME);
+    // Remove the message from the set
+    reply = redisCommand(c, "SREM %s %b", SET_NAME, message, message_size);
     if (reply == NULL) {
-      printf("Error: %s\n", c->errstr);
-      return;
+        printf("Error removing from set: %s\n", c->errstr);
+        return;
     }
-
-    if (reply->integer == 0) {
-      printf("No messages in the queue. Terminating consumer...\n");
-      freeReplyObject(reply);
-      break;
-    }
-
+    printf("Removed from set: %.*s\n", (int)message_size, message);
     freeReplyObject(reply);
 
-    reply = redisCommand(c, "LPOP %s", CONSUMER_NAME);
+    // Remove the message from the list
+    reply = redisCommand(c, "LREM %s 0 %b", PRODUCER_NAME, message, message_size);
     if (reply == NULL) {
-      printf("Error: %s\n", c->errstr);
-      return;
+        printf("Error removing from list: %s\n", c->errstr);
+        return;
     }
+    printf("Removed from list: %.*s\n", (int)message_size, message);
+    freeReplyObject(reply);
+}
 
-    if (reply->type == REDIS_REPLY_STRING) {
-      printf("Consumed: %s\n", reply->str);
-      // Simulate message processing
-      // sleep(2);
+void publish_message(redisContext *c, uint8_t *message, size_t message_size) {
+    redisReply *reply;
 
-      // Remove the message from the set
-      redisReply *set_reply =
-          redisCommand(c, "SREM %s %s", SET_NAME, reply->str);
-      if (set_reply == NULL) {
+    // Check if the message is already a member of the set
+    reply = redisCommand(c, "SISMEMBER %s %b", SET_NAME, message, message_size);
+    if (reply == NULL) {
         printf("Error: %s\n", c->errstr);
         freeReplyObject(reply);
         return;
-      }
-
-      freeReplyObject(set_reply);
-
-      // Trim the list
-      redisReply *trim_reply =
-          redisCommand(c, "LTRIM %s -%d -1", CONSUMER_NAME, MAX_QUEUE_SIZE);
-      if (trim_reply == NULL) {
-        printf("Command failed\n");
-        redisFree(c);
-        exit(1);
-      }
-      freeReplyObject(trim_reply);
-
-    } else {
-      printf("No messages to consume. Waiting...\n");
     }
 
+    if (reply->integer != 0) {
+        freeReplyObject(reply);
+
+        // Add to the set
+        reply = redisCommand(c, "SADD %s %b", SET_NAME, message, message_size);
+        if (reply == NULL){
+            printf("Set adding error: %s\n", c->errstr);
+            freeReplyObject(reply);
+            return;
+        }
+        freeReplyObject(reply);
+
+        // Push to the list
+        reply = redisCommand(c, "RPUSH %s %b", PRODUCER_NAME, message, message_size);
+        printf("Published: %s\n", message);
+        if(reply == NULL){
+            printf("publish message error: %s\n", c->errstr);
+            freeReplyObject(reply);
+            cleanup_message(c, message, message_size);
+            return;
+        }
+        
+        freeReplyObject(reply);
+
+        // Trim the list if it exceeds the maximum length
+        reply = redisCommand(c, "LTRIM %s -%d -1", PRODUCER_NAME, MAX_QUEUE_SIZE);
+        if (reply == NULL){
+            printf("Trim error: %s\n", c->errstr);
+            freeReplyObject(reply);
+            cleanup_message(c, message, message_size);
+            return;
+        }
+    } else {
+        printf("Message %s is a duplicate and was not added.\n", message);
+    }
     freeReplyObject(reply);
-    // sleep(1);  // Simulate a delay before the next iteration
+}
+
+char* consume_messages(redisContext *c) {
+  redisReply *reply;
+  char *message;
+  
+  reply = redisCommand(c, "LLEN %s", CONSUMER_NAME);
+  if (reply == NULL) {
+    printf("Error: %s\n", c->errstr);
+    return NULL;
   }
+
+  if (reply->integer == 0) {
+    printf("No messages in the queue. Skip...\n");
+    freeReplyObject(reply);
+    return NULL;
+  }
+
+  freeReplyObject(reply);
+
+  reply = redisCommand(c, "LPOP %s", CONSUMER_NAME);
+  if (reply == NULL) {
+    printf("Error: %s\n", c->errstr);
+    return NULL;
+  }
+
+  if (reply->type == REDIS_REPLY_STRING) {
+    printf("Consumed: %s\n", reply->str);
+    message = reply->str;
+
+    // Remove the message from the set
+    redisReply *set_reply =
+        redisCommand(c, "SREM %s %s", SET_NAME, reply->str);
+    if (set_reply == NULL) {
+      printf("Error: %s\n", c->errstr);
+      freeReplyObject(reply);
+      return NULL;
+    }
+    freeReplyObject(set_reply);
+
+    // Trim the list
+    redisReply *trim_reply =
+        redisCommand(c, "LTRIM %s -%d -1", CONSUMER_NAME, MAX_QUEUE_SIZE);
+    if (trim_reply == NULL) {
+      printf("Command failed\n");
+      redisFree(c);
+      exit(1);
+    }
+    freeReplyObject(trim_reply);
+
+  } else {
+    printf("No messages to consume. Waiting...\n");
+    message = NULL;
+  }
+
+  freeReplyObject(reply);
+  return message;
 }
 
 typedef struct my_mutator {
@@ -194,20 +226,30 @@ size_t afl_custom_fuzz(my_mutator_t *data, uint8_t *buf, size_t buf_size,
     }
   }
 
-  //if (c) consume_message(c);
-  // if (consumed_size > 0){
-  //   buf = append_to_buf(buf, buf_size, consumed_messages, consumed_size);
-  // }
-  //if (c) publish_message(c, "hello!!!");
-  // send buffer
-  //printf("buff: %s\nbuf_size: %d\n", buf, buf_size);
-  char *message=convert_unit8_as_string(buf, buf_size);
-  printf("buff: %s\nbuf_size: %d\nadd_buf: %s\nadd_buf_size: %d\n", buf, buf_size, add_buf, add_buf_size);
-  if (c) publish_message(c, message);
-  // Clean up
-  free(message);
+  // publish message
+  if (c) publish_message(c, buf, buf_size);
 
   u32 havoc_steps = 1 + rand_below(data->afl, 16);
+
+  //consume message
+  // uint8_t *new_buf = NULL;
+  // size_t new_buf_size = 0;
+  // if (c) {
+  //   char *message = consume_message(c);
+  //   if (message){
+  //     // the mutation
+  //     my_u8_t new_buf_message = convert_char_to_uint8(message);
+  //     new_buf = new_buf_message.buf;
+  //     new_buf_size = new_buf_message.buf_size;
+  //     free(message);
+  //     free(new_buf_message.buf);
+  //     free(new_buf_message);
+
+  //     memcpy(data->buf, new_buf, new_buf_size);
+
+  //     return new_buf_size;
+  //   }
+  // }
 
   /* set everything up, costly ... :( */
   memcpy(data->buf, buf, buf_size);
