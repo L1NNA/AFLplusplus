@@ -4,7 +4,7 @@
 #include <hiredis/hiredis.h>
 
 // host
-#define REDIS_HOST "localhost"
+#define REDIS_HOST "static-host"
 #define REDIS_HOST_WIN "host.docker.internal"
 #define REDIS_PORT 6379
 #define REDIS_PASSWORD "password"
